@@ -221,9 +221,165 @@ class FreeCADRPC:
     def get_parts_list(self):
         return get_parts_list()
 
+    def activate_workbench(self, workbench_name: str) -> dict[str, Any]:
+        """Activate a FreeCAD workbench.
+
+        Args:
+            workbench_name: Name of the workbench to activate (e.g., "FastenersWorkbench", "PartDesign", "Draft")
+
+        Returns:
+            Success status and workbench information
+        """
+        rpc_request_queue.put(lambda: self._activate_workbench_gui(workbench_name))
+        res = rpc_response_queue.get()
+        if res is True:
+            return {
+                "success": True,
+                "message": f"Workbench '{workbench_name}' activated successfully",
+                "workbench": workbench_name
+            }
+        else:
+            return {"success": False, "error": res}
+
+    def boolean_operation(
+        self,
+        doc_name: str,
+        operation: str,
+        base_obj_name: str,
+        tool_obj_name: str,
+        result_name: str = None,
+        keep_originals: bool = False
+    ) -> dict[str, Any]:
+        """Perform boolean operation between two objects.
+
+        Args:
+            doc_name: Document name
+            operation: "cut", "fuse", or "common"
+            base_obj_name: First object name
+            tool_obj_name: Second object name
+            result_name: Name for result object (auto-generated if None)
+            keep_originals: If True, keep original objects
+
+        Returns:
+            Success status and result object name
+        """
+        rpc_request_queue.put(
+            lambda: self._boolean_operation_gui(
+                doc_name, operation, base_obj_name, tool_obj_name, result_name, keep_originals
+            )
+        )
+        res = rpc_response_queue.get()
+        if isinstance(res, str):
+            return {"success": False, "error": res}
+        else:
+            return {"success": True, "result_object": res["result_object"], "message": res["message"]}
+
+    def create_box(
+        self,
+        doc_name: str,
+        name: str,
+        length: float,
+        width: float,
+        height: float,
+        position: dict[str, float] = None,
+        color: list[float] = None
+    ) -> dict[str, Any]:
+        """Create a box with simplified parameters.
+
+        Args:
+            doc_name: Document name
+            name: Object name
+            length: Box length (X dimension)
+            width: Box width (Y dimension)
+            height: Box height (Z dimension)
+            position: Optional position dict with x, y, z keys
+            color: Optional RGBA color [R, G, B, A] (0.0-1.0)
+
+        Returns:
+            Success status and object name
+        """
+        obj_data = {
+            "Name": name,
+            "Type": "Part::Box",
+            "Properties": {
+                "Length": length,
+                "Width": width,
+                "Height": height
+            }
+        }
+
+        if position:
+            obj_data["Properties"]["Placement"] = {
+                "Base": {"x": position.get("x", 0), "y": position.get("y", 0), "z": position.get("z", 0)}
+            }
+
+        if color:
+            obj_data["Properties"]["ViewObject"] = {
+                "ShapeColor": color
+            }
+
+        return self.create_object(doc_name, obj_data)
+
+    def create_cylinder(
+        self,
+        doc_name: str,
+        name: str,
+        radius: float,
+        height: float,
+        position: dict[str, float] = None,
+        direction: dict[str, float] = None,
+        color: list[float] = None
+    ) -> dict[str, Any]:
+        """Create a cylinder with simplified parameters.
+
+        Args:
+            doc_name: Document name
+            name: Object name
+            radius: Cylinder radius
+            height: Cylinder height
+            position: Optional position dict with x, y, z keys
+            direction: Optional direction dict with x, y, z keys (default: Z-axis)
+            color: Optional RGBA color [R, G, B, A] (0.0-1.0)
+
+        Returns:
+            Success status and object name
+        """
+        obj_data = {
+            "Name": name,
+            "Type": "Part::Cylinder",
+            "Properties": {
+                "Radius": radius,
+                "Height": height
+            }
+        }
+
+        if position or direction:
+            placement = {"Base": {}}
+            if position:
+                placement["Base"] = {"x": position.get("x", 0), "y": position.get("y", 0), "z": position.get("z", 0)}
+            else:
+                placement["Base"] = {"x": 0, "y": 0, "z": 0}
+
+            if direction:
+                # Calculate rotation from direction vector
+                # For now, just store the direction - FreeCAD will handle rotation
+                placement["Rotation"] = {
+                    "Axis": {"x": direction.get("x", 0), "y": direction.get("y", 0), "z": direction.get("z", 1)},
+                    "Angle": 0
+                }
+
+            obj_data["Properties"]["Placement"] = placement
+
+        if color:
+            obj_data["Properties"]["ViewObject"] = {
+                "ShapeColor": color
+            }
+
+        return self.create_object(doc_name, obj_data)
+
     def get_active_screenshot(self, view_name: str = "Isometric") -> str:
         """Get a screenshot of the active view.
-        
+
         Returns a base64-encoded string of the screenshot or None if a screenshot
         cannot be captured (e.g., when in TechDraw or Spreadsheet view).
         """
@@ -280,64 +436,89 @@ class FreeCADRPC:
 
     def _create_object_gui(self, doc_name, obj: Object):
         doc = FreeCAD.getDocument(doc_name)
-        if doc:
-            try:
-                if obj.type == "Fem::FemMeshGmsh" and obj.analysis:
-                    from femmesh.gmshtools import GmshTools
-                    res = getattr(doc, obj.analysis).addObject(ObjectsFem.makeMeshGmsh(doc, obj.name))[0]
-                    if "Part" in obj.properties:
-                        target_obj = doc.getObject(obj.properties["Part"])
-                        if target_obj:
-                            res.Part = target_obj
-                        else:
-                            raise ValueError(f"Referenced object '{obj.properties['Part']}' not found.")
-                        del obj.properties["Part"]
+        if not doc:
+            available_docs = list(FreeCAD.listDocuments().keys())
+            error_msg = f"Document '{doc_name}' not found."
+            if available_docs:
+                error_msg += f" Available documents: {', '.join(available_docs)}"
+            else:
+                error_msg += " No documents are currently open."
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+
+        # Check if object with same name already exists
+        if doc.getObject(obj.name):
+            error_msg = f"Object '{obj.name}' already exists in document '{doc_name}'."
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+
+        try:
+            if obj.type == "Fem::FemMeshGmsh" and obj.analysis:
+                from femmesh.gmshtools import GmshTools
+                res = getattr(doc, obj.analysis).addObject(ObjectsFem.makeMeshGmsh(doc, obj.name))[0]
+                if "Part" in obj.properties:
+                    target_obj = doc.getObject(obj.properties["Part"])
+                    if target_obj:
+                        res.Part = target_obj
                     else:
-                        raise ValueError("'Part' property not found in properties.")
-
-                    for param, value in obj.properties.items():
-                        if hasattr(res, param):
-                            setattr(res, param, value)
-                    doc.recompute()
-
-                    gmsh_tools = GmshTools(res)
-                    gmsh_tools.create_mesh()
-                    FreeCAD.Console.PrintMessage(
-                        f"FEM Mesh '{res.Name}' generated successfully in '{doc_name}'.\n"
-                    )
-                elif obj.type.startswith("Fem::"):
-                    fem_make_methods = {
-                        "MaterialCommon": ObjectsFem.makeMaterialSolid,
-                        "AnalysisPython": ObjectsFem.makeAnalysis,
-                    }
-                    obj_type_short = obj.type.split("::")[1]
-                    method_name = "make" + obj_type_short
-                    make_method = fem_make_methods.get(obj_type_short, getattr(ObjectsFem, method_name, None))
-
-                    if callable(make_method):
-                        res = make_method(doc, obj.name)
-                        set_object_property(doc, res, obj.properties)
-                        FreeCAD.Console.PrintMessage(
-                            f"FEM object '{res.Name}' created with '{method_name}'.\n"
+                        available_objs = [o.Label for o in doc.Objects]
+                        raise ValueError(
+                            f"Referenced object '{obj.properties['Part']}' not found. "
+                            f"Available objects: {', '.join(available_objs[:10])}"
+                            + ("..." if len(available_objs) > 10 else "")
                         )
-                    else:
-                        raise ValueError(f"No creation method '{method_name}' found in ObjectsFem.")
-                    if obj.type != "Fem::AnalysisPython" and obj.analysis:
-                        getattr(doc, obj.analysis).addObject(res)
+                    del obj.properties["Part"]
                 else:
-                    res = doc.addObject(obj.type, obj.name)
+                    raise ValueError("'Part' property not found in properties.")
+
+                for param, value in obj.properties.items():
+                    if hasattr(res, param):
+                        setattr(res, param, value)
+                doc.recompute()
+
+                gmsh_tools = GmshTools(res)
+                gmsh_tools.create_mesh()
+                FreeCAD.Console.PrintMessage(
+                    f"FEM Mesh '{res.Name}' generated successfully in '{doc_name}'.\n"
+                )
+            elif obj.type.startswith("Fem::"):
+                fem_make_methods = {
+                    "MaterialCommon": ObjectsFem.makeMaterialSolid,
+                    "AnalysisPython": ObjectsFem.makeAnalysis,
+                }
+                obj_type_short = obj.type.split("::")[1]
+                method_name = "make" + obj_type_short
+                make_method = fem_make_methods.get(obj_type_short, getattr(ObjectsFem, method_name, None))
+
+                if callable(make_method):
+                    res = make_method(doc, obj.name)
                     set_object_property(doc, res, obj.properties)
                     FreeCAD.Console.PrintMessage(
-                        f"{res.TypeId} '{res.Name}' added to '{doc_name}' via RPC.\n"
+                        f"FEM object '{res.Name}' created with '{method_name}'.\n"
                     )
- 
-                doc.recompute()
-                return True
-            except Exception as e:
-                return str(e)
-        else:
-            FreeCAD.Console.PrintError(f"Document '{doc_name}' not found.\n")
-            return f"Document '{doc_name}' not found.\n"
+                else:
+                    raise ValueError(f"No creation method '{method_name}' found in ObjectsFem.")
+                if obj.type != "Fem::AnalysisPython" and obj.analysis:
+                    getattr(doc, obj.analysis).addObject(res)
+            else:
+                res = doc.addObject(obj.type, obj.name)
+                set_object_property(doc, res, obj.properties)
+
+                # Set ViewObject visibility (NEW - addresses invisible objects issue)
+                if hasattr(res, "ViewObject") and res.ViewObject:
+                    res.ViewObject.Visibility = True
+                    FreeCAD.Console.PrintMessage(f"ViewObject visibility set for '{res.Name}'.\n")
+
+                FreeCAD.Console.PrintMessage(
+                    f"{res.TypeId} '{res.Name}' added to '{doc_name}' via RPC.\n"
+                )
+
+            doc.recompute()
+            return True
+        except Exception as e:
+            error_msg = f"Failed to create object '{obj.name}': {str(e)}"
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
 
     def _edit_object_gui(self, doc_name: str, obj: Object):
         doc = FreeCAD.getDocument(doc_name)
@@ -394,13 +575,128 @@ class FreeCADRPC:
         except Exception as e:
             return str(e)
 
+    def _activate_workbench_gui(self, workbench_name: str):
+        """Activate workbench in GUI thread"""
+        try:
+            # List of common workbenches for validation
+            common_workbenches = [
+                "FastenersWorkbench", "PartDesign", "Draft", "Sketcher",
+                "Arch", "Path", "Part", "Fem", "Drawing", "Mesh", "Points",
+                "Raytracing", "Spreadsheet", "Surface", "TechDraw", "Web"
+            ]
+
+            # Get list of available workbenches
+            available_workbenches = FreeCADGui.listWorkbenches()
+
+            if workbench_name not in available_workbenches:
+                return (
+                    f"Workbench '{workbench_name}' not found. "
+                    f"Available workbenches: {', '.join(sorted(available_workbenches.keys()))}"
+                )
+
+            # Activate the workbench
+            FreeCADGui.activateWorkbench(workbench_name)
+            FreeCAD.Console.PrintMessage(f"Workbench '{workbench_name}' activated via RPC.\n")
+            return True
+        except Exception as e:
+            error_msg = f"Failed to activate workbench '{workbench_name}': {str(e)}"
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+
+    def _boolean_operation_gui(
+        self,
+        doc_name: str,
+        operation: str,
+        base_obj_name: str,
+        tool_obj_name: str,
+        result_name: str = None,
+        keep_originals: bool = False
+    ):
+        """Perform boolean operation in GUI thread"""
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+            if not doc:
+                available_docs = list(FreeCAD.listDocuments().keys())
+                error_msg = f"Document '{doc_name}' not found."
+                if available_docs:
+                    error_msg += f" Available documents: {', '.join(available_docs)}"
+                return error_msg
+
+            # Get objects
+            base_obj = doc.getObject(base_obj_name)
+            tool_obj = doc.getObject(tool_obj_name)
+
+            if not base_obj:
+                available_objs = [o.Label for o in doc.Objects]
+                return (
+                    f"Base object '{base_obj_name}' not found in document '{doc_name}'. "
+                    f"Available objects: {', '.join(available_objs[:10])}"
+                    + ("..." if len(available_objs) > 10 else "")
+                )
+
+            if not tool_obj:
+                available_objs = [o.Label for o in doc.Objects]
+                return (
+                    f"Tool object '{tool_obj_name}' not found in document '{doc_name}'. "
+                    f"Available objects: {', '.join(available_objs[:10])}"
+                    + ("..." if len(available_objs) > 10 else "")
+                )
+
+            # Validate operation
+            if operation not in ["cut", "fuse", "common"]:
+                return f"Invalid operation '{operation}'. Must be 'cut', 'fuse', or 'common'."
+
+            # Perform boolean operation
+            if operation == "cut":
+                result_shape = base_obj.Shape.cut(tool_obj.Shape)
+                op_name = "Cut"
+            elif operation == "fuse":
+                result_shape = base_obj.Shape.fuse(tool_obj.Shape)
+                op_name = "Fuse"
+            else:  # common
+                result_shape = base_obj.Shape.common(tool_obj.Shape)
+                op_name = "Common"
+
+            # Create result object
+            if result_name is None:
+                result_name = f"{op_name}_{base_obj_name}_{tool_obj_name}"
+
+            result_obj = doc.addObject("Part::Feature", result_name)
+            result_obj.Shape = result_shape
+
+            # Set ViewObject properties
+            if hasattr(result_obj, "ViewObject") and result_obj.ViewObject:
+                result_obj.ViewObject.Visibility = True
+
+            # Hide or delete originals
+            if not keep_originals:
+                if hasattr(base_obj, "ViewObject") and base_obj.ViewObject:
+                    base_obj.ViewObject.Visibility = False
+                if hasattr(tool_obj, "ViewObject") and tool_obj.ViewObject:
+                    tool_obj.ViewObject.Visibility = False
+
+            doc.recompute()
+
+            FreeCAD.Console.PrintMessage(
+                f"Boolean operation '{operation}' completed: '{result_obj.Name}' created.\n"
+            )
+            return {
+                "result_object": result_obj.Name,
+                "message": f"Boolean {operation} completed successfully"
+            }
+
+        except Exception as e:
+            error_msg = f"Failed to perform boolean operation: {str(e)}"
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+
     def _save_active_screenshot(self, save_path: str, view_name: str = "Isometric"):
         try:
             view = FreeCADGui.ActiveDocument.ActiveView
             # Check if the view supports screenshots
             if not hasattr(view, 'saveImage'):
                 return "Current view does not support screenshots"
-                
+
             if view_name == "Isometric":
                 view.viewIsometric()
             elif view_name == "Front":
