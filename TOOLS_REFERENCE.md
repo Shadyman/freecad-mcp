@@ -1,6 +1,6 @@
 # FreeCAD MCP Tools Reference
 
-**Version**: 0.2.0
+**Version**: 0.2.1
 **Last Updated**: 2025-11-13
 
 This document provides a complete reference for all tools available in the FreeCAD MCP server.
@@ -14,6 +14,7 @@ This document provides a complete reference for all tools available in the FreeC
 - [Object Manipulation](#object-manipulation)
 - [Boolean Operations](#boolean-operations)
 - [Geometry Convenience Tools](#geometry-convenience-tools)
+- [Fasteners](#fasteners)
 - [Workbench Management](#workbench-management)
 - [Visualization](#visualization)
 - [Parts Library](#parts-library)
@@ -373,6 +374,116 @@ Simplified cylinder creation with intuitive parameters.
     "color_b": 1.0
 }
 ```
+
+---
+
+## Fasteners
+
+### `create_fastener(doc_name, name, fastener_type, position_x, position_y, position_z, attach_to, diameter, length)` ✨ NEW
+
+Create hardware fasteners (screws, bolts, nuts, washers) using the Fasteners Workbench.
+
+**Why this tool?** Eliminates the need for manual workbench activation and complex `execute_code()` calls. Creates fasteners with a single tool call including automatic visibility and positioning.
+
+**Requirements:**
+- Fasteners Workbench must be installed in FreeCAD
+- Will automatically activate FastenersWorkbench when called
+
+**Parameters:**
+- `doc_name` (string): Document name
+- `name` (string): Name for the fastener object
+- `fastener_type` (string): Type of fastener to create
+- `position_x` (float, optional): X coordinate (default: 0)
+- `position_y` (float, optional): Y coordinate (default: 0)
+- `position_z` (float, optional): Z coordinate (default: 0)
+- `attach_to` (string, optional): Name of object to attach fastener to (default: None)
+- `diameter` (string, optional): Fastener diameter like "M3", "M4", "M5", "M6", "M8" (default: "M4")
+- `length` (string, optional): Fastener length in mm as string like "6", "8", "10", "12", "16", "20" (default: "10")
+
+**Common Fastener Types:**
+
+| Type | Description | Common Uses |
+|------|-------------|-------------|
+| **DIN464** | Knurled thumb screw | Tool-less mounting, rack panels, faceplates |
+| **ISO4017** | Hex head bolt | General purpose structural fastening |
+| **DIN912** | Socket head cap screw (Allen bolt) | Precision applications, clean appearance |
+| **ISO4032** | Hex nut | Pairing with bolts |
+| **ISO7380** | Button head screw | Low-profile aesthetic fastening |
+| **DIN933** | Hex head screw | Similar to ISO4017 |
+| **ISO7089** | Plain washer | Load distribution |
+| **ISO7380-2** | Button head with flange | Wide bearing surface |
+| **ISO10642** | Countersunk screw | Flush mounting |
+
+**Common Diameters:**
+- **M3**: Small electronics, circuit boards (3mm thread)
+- **M4**: Common for rack mounting, faceplates (4mm thread)
+- **M5**: Frame mounting, structural connections (5mm thread)
+- **M6**: Heavy-duty mounting (6mm thread)
+- **M8**: Large structural applications (8mm thread)
+
+**Returns:**
+- Success message with fastener details and screenshot
+
+**Example - Thumbscrew for Faceplate:**
+```json
+{
+    "doc_name": "USFF_Tray_Assembly",
+    "name": "Thumbscrew_Left",
+    "fastener_type": "DIN464",
+    "position_x": 7.9375,
+    "position_y": -6,
+    "position_z": 22.225,
+    "attach_to": "Faceplate_Final",
+    "diameter": "M4"
+}
+```
+
+**Example - Socket Cap Screw:**
+```json
+{
+    "doc_name": "MyProject",
+    "name": "MountingScrew",
+    "fastener_type": "DIN912",
+    "position_x": 50,
+    "position_y": 0,
+    "position_z": 10,
+    "diameter": "M5",
+    "length": "16"
+}
+```
+
+**Example - Hex Bolt with Nut:**
+```json
+// First create the bolt
+{
+    "doc_name": "Assembly",
+    "name": "Bolt_1",
+    "fastener_type": "ISO4017",
+    "position_x": 20,
+    "position_y": 30,
+    "position_z": 0,
+    "diameter": "M6",
+    "length": "30"
+}
+
+// Then create the nut at the same position
+{
+    "doc_name": "Assembly",
+    "name": "Nut_1",
+    "fastener_type": "ISO4032",
+    "position_x": 20,
+    "position_y": 30,
+    "position_z": 30,  // Offset by bolt length
+    "diameter": "M6"
+}
+```
+
+**Benefits over `execute_code()`:**
+- **95% code reduction**: Single call vs. 30+ lines
+- **Automatic workbench activation**: No manual `activateWorkbench()` needed
+- **Automatic visibility**: Fasteners visible immediately
+- **Clear error messages**: Lists available objects if attach target not found
+- **Type safety**: Parameter validation before creation
 
 ---
 

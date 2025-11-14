@@ -377,6 +377,47 @@ class FreeCADRPC:
 
         return self.create_object(doc_name, obj_data)
 
+    def create_fastener(
+        self,
+        doc_name: str,
+        name: str,
+        fastener_type: str,
+        position: dict[str, float] = None,
+        attach_to: str = None,
+        diameter: str = "M4",
+        length: str = "10"
+    ) -> dict[str, Any]:
+        """Create a fastener using FastenersWorkbench.
+
+        Args:
+            doc_name: Document name
+            name: Object name for the fastener
+            fastener_type: Fastener type (e.g., "DIN464", "ISO4017", "DIN912")
+            position: Optional position dict with x, y, z keys
+            attach_to: Optional object name to attach fastener to
+            diameter: Fastener diameter (e.g., "M3", "M4", "M5", "M6")
+            length: Fastener length in mm (as string)
+
+        Returns:
+            Success status and object name
+        """
+        rpc_request_queue.put(
+            lambda: self._create_fastener_gui(
+                doc_name, name, fastener_type, position, attach_to, diameter, length
+            )
+        )
+        res = rpc_response_queue.get()
+        if isinstance(res, str):
+            return {"success": False, "error": res}
+        else:
+            return {
+                "success": True,
+                "object_name": res["object_name"],
+                "fastener_type": fastener_type,
+                "position": position or {"x": 0, "y": 0, "z": 0},
+                "message": res["message"]
+            }
+
     def get_active_screenshot(self, view_name: str = "Isometric") -> str:
         """Get a screenshot of the active view.
 
@@ -687,6 +728,86 @@ class FreeCADRPC:
 
         except Exception as e:
             error_msg = f"Failed to perform boolean operation: {str(e)}"
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+
+    def _create_fastener_gui(
+        self,
+        doc_name: str,
+        name: str,
+        fastener_type: str,
+        position: dict[str, float] = None,
+        attach_to: str = None,
+        diameter: str = "M4",
+        length: str = "10"
+    ):
+        """Create fastener in GUI thread"""
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+            if not doc:
+                available_docs = list(FreeCAD.listDocuments().keys())
+                error_msg = f"Document '{doc_name}' not found."
+                if available_docs:
+                    error_msg += f" Available documents: {', '.join(available_docs)}"
+                return error_msg
+
+            # Ensure FastenersWorkbench is activated
+            available_workbenches = FreeCADGui.listWorkbenches()
+            if "FastenersWorkbench" not in available_workbenches:
+                return (
+                    "FastenersWorkbench not found. "
+                    "Please install the Fasteners Workbench add-on from FreeCAD."
+                )
+
+            # Activate FastenersWorkbench
+            FreeCADGui.activateWorkbench("FastenersWorkbench")
+
+            # Import FastenersCmd
+            import FastenersCmd
+
+            # Get attach_to object if specified
+            attach_obj = None
+            if attach_to:
+                attach_obj = doc.getObject(attach_to)
+                if not attach_obj:
+                    available_objs = [o.Label for o in doc.Objects]
+                    return (
+                        f"Attach object '{attach_to}' not found in document '{doc_name}'. "
+                        f"Available objects: {', '.join(available_objs[:10])}"
+                        + ("..." if len(available_objs) > 10 else "")
+                    )
+
+            # Create fastener object
+            screw_obj = doc.addObject("Part::FeaturePython", name)
+
+            # Use FSScrewObject with correct signature
+            # Signature: FSScrewObject(obj, fastener_type, attach_to_obj)
+            FastenersCmd.FSScrewObject(screw_obj, fastener_type, attach_obj)
+
+            # Set position if provided
+            if position:
+                screw_obj.Placement.Base = FreeCAD.Vector(
+                    position.get("x", 0),
+                    position.get("y", 0),
+                    position.get("z", 0)
+                )
+
+            # Set ViewObject properties for visibility
+            if hasattr(screw_obj, "ViewObject") and screw_obj.ViewObject:
+                screw_obj.ViewObject.Visibility = True
+
+            doc.recompute()
+
+            FreeCAD.Console.PrintMessage(
+                f"Fastener '{screw_obj.Name}' ({fastener_type}) created successfully.\n"
+            )
+            return {
+                "object_name": screw_obj.Name,
+                "message": f"Fastener '{fastener_type}' created successfully"
+            }
+
+        except Exception as e:
+            error_msg = f"Failed to create fastener: {str(e)}"
             FreeCAD.Console.PrintError(error_msg + "\n")
             return error_msg
 

@@ -127,6 +127,18 @@ else:
     ) -> dict[str, Any]:
         return self.server.create_cylinder(doc_name, name, radius, height, position, direction, color)
 
+    def create_fastener(
+        self,
+        doc_name: str,
+        name: str,
+        fastener_type: str,
+        position: dict[str, float] = None,
+        attach_to: str = None,
+        diameter: str = "M4",
+        length: str = "10"
+    ) -> dict[str, Any]:
+        return self.server.create_fastener(doc_name, name, fastener_type, position, attach_to, diameter, length)
+
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
@@ -950,6 +962,115 @@ def create_cylinder(
         logger.error(f"Failed to create cylinder: {str(e)}")
         return [
             TextContent(type="text", text=f"Failed to create cylinder: {str(e)}")
+        ]
+
+
+@mcp.tool()
+def create_fastener(
+    ctx: Context,
+    doc_name: str,
+    name: str,
+    fastener_type: str,
+    position_x: float = 0,
+    position_y: float = 0,
+    position_z: float = 0,
+    attach_to: str = None,
+    diameter: str = "M4",
+    length: str = "10"
+) -> list[TextContent | ImageContent]:
+    """Create a fastener (screw, bolt, nut) using the Fasteners Workbench.
+
+    This tool creates hardware fasteners like screws, bolts, nuts, and washers using the FreeCAD
+    Fasteners Workbench. The Fasteners Workbench must be installed in FreeCAD.
+
+    Args:
+        doc_name: The name of the document to create the fastener in.
+        name: The name for the fastener object.
+        fastener_type: The type of fastener to create. Common types:
+            - "DIN464": Knurled thumb screw (for tool-less adjustment)
+            - "ISO4017": Hex head bolt (standard bolt)
+            - "DIN912": Socket head cap screw (Allen bolt)
+            - "ISO4032": Hex nut
+            - "ISO7380": Button head screw
+            - "DIN933": Hex head screw
+            - "ISO7089": Plain washer
+        position_x: X coordinate of the fastener position (default: 0).
+        position_y: Y coordinate of the fastener position (default: 0).
+        position_z: Z coordinate of the fastener position (default: 0).
+        attach_to: Optional name of object to attach the fastener to (default: None).
+        diameter: Fastener diameter as string (e.g., "M3", "M4", "M5", "M6", "M8") (default: "M4").
+        length: Fastener length in mm as string (e.g., "6", "8", "10", "12", "16", "20") (default: "10").
+
+    Returns:
+        A message indicating success or failure and a screenshot.
+
+    Common Fastener Types:
+        - DIN464 (Thumbscrew): For tool-less mounting, common in rack panels
+        - ISO4017 (Hex Bolt): General purpose bolts
+        - DIN912 (Socket Cap): For precision applications
+        - ISO4032 (Hex Nut): Standard nuts
+        - ISO7380 (Button Head): Low-profile aesthetic fastening
+
+    Examples:
+        Create M4 thumbscrew for faceplate mounting:
+        ```json
+        {
+            "doc_name": "USFF_Tray",
+            "name": "Thumbscrew_Left",
+            "fastener_type": "DIN464",
+            "position_x": 7.9375,
+            "position_y": -6,
+            "position_z": 22.225,
+            "attach_to": "Faceplate_Final",
+            "diameter": "M4"
+        }
+        ```
+
+        Create M5 hex bolt:
+        ```json
+        {
+            "doc_name": "MyProject",
+            "name": "MountingBolt",
+            "fastener_type": "ISO4017",
+            "position_x": 50,
+            "position_y": 0,
+            "position_z": 10,
+            "diameter": "M5",
+            "length": "20"
+        }
+        ```
+
+    Note:
+        The Fasteners Workbench will be automatically activated when using this tool.
+        If the workbench is not installed, the tool will return an error with installation instructions.
+    """
+    freecad = get_freecad_connection()
+    try:
+        position = {"x": position_x, "y": position_y, "z": position_z}
+
+        res = freecad.create_fastener(
+            doc_name, name, fastener_type, position, attach_to, diameter, length
+        )
+        screenshot = freecad.get_active_screenshot()
+
+        if res["success"]:
+            response = [
+                TextContent(
+                    type="text",
+                    text=f"Fastener '{res['object_name']}' created successfully "
+                         f"(Type: {fastener_type}, Size: {diameter}×{length}mm)"
+                )
+            ]
+            return add_screenshot_if_available(response, screenshot)
+        else:
+            response = [
+                TextContent(type="text", text=f"Failed to create fastener: {res['error']}")
+            ]
+            return add_screenshot_if_available(response, screenshot)
+    except Exception as e:
+        logger.error(f"Failed to create fastener: {str(e)}")
+        return [
+            TextContent(type="text", text=f"Failed to create fastener: {str(e)}")
         ]
 
 
