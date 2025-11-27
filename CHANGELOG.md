@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.3.0] - 2025-11-26 - Sketch-Based Modeling & Batch Operations
+
+### Added
+
+#### Sketch-Based Modeling Tools
+- **`create_sketch(doc_name, name, plane, origin_x, origin_y, origin_z, body_name)`** - Create parametric sketches
+  - Supports XY, XZ, YZ planes
+  - Optional PartDesign Body integration
+  - Foundation for parametric design workflow
+
+- **`add_sketch_geometry(doc_name, sketch_name, geometry, construction)`** - Add 2D geometry to sketches
+  - **Lines**: `{"type": "line", "x1": 0, "y1": 0, "x2": 10, "y2": 0}`
+  - **Rectangles**: `{"type": "rectangle", "x": -10, "y": -10, "width": 20, "height": 20}` (auto-closes with constraints)
+  - **Circles**: `{"type": "circle", "cx": 0, "cy": 0, "radius": 5}`
+  - **Arcs**: `{"type": "arc", "cx": 0, "cy": 0, "radius": 5, "start_angle": 0, "end_angle": 90}`
+  - Returns geometry IDs for constraint references
+
+- **`add_sketch_constraints(doc_name, sketch_name, constraints)`** - Add constraints to sketches
+  - **Geometric**: horizontal, vertical, coincident, perpendicular, parallel, symmetric
+  - **Dimensional**: distance, radius
+  - **Reference**: equal, fix
+  - Point indices: 1=start, 2=end, 3=center
+
+- **`create_extrusion(doc_name, name, sketch_name, length, symmetric, reversed, body_name)`** - Extrude sketches to 3D
+  - Uses PartDesign::Pad for parametric history
+  - Symmetric extrusion option
+  - Auto-hides source sketch
+
+#### Aluminum Extrusion Tool
+- **`create_2020_extrusion(doc_name, name, length, position_x/y/z, direction, color_*, simplified)`** - Create 2020 T-slot profiles
+  - 20mm × 20mm standard aluminum extrusion profile
+  - Extrude along X, Y, or Z axis
+  - Simplified mode (fast) or detailed T-slot profile
+  - Default aluminum gray color (0.7, 0.7, 0.75)
+  - Position by center coordinates
+  - **Perfect for**: 3D printer frames, CNC machines, rack systems
+
+  **Example:**
+  ```json
+  {
+      "doc_name": "MiniRack_Assembly_6U",
+      "name": "VerticalPost_FL",
+      "length": 266.7,
+      "position_x": 0,
+      "position_y": 0,
+      "position_z": 20,
+      "direction": "Z"
+  }
+  ```
+
+#### Batch Operations Tool
+- **`batch_position(doc_name, objects, offset_x/y/z, position_x/y/z, absolute)`** - Move multiple objects at once
+  - Relative offset mode (default): add offset to current position
+  - Absolute position mode: set specific coordinates
+  - Preserves object rotation
+  - Reports success count and missing objects
+  - **Solves**: the common pain point of moving related objects together
+
+  **Example - Move all trays up 20mm:**
+  ```json
+  {
+      "doc_name": "MiniRack_Assembly_6U",
+      "objects": ["Tray1_Assembly", "Tray2_Assembly", "Tray3_Assembly"],
+      "offset_z": 20
+  }
+  ```
+
+### Changed
+- Updated TOOLS_REFERENCE.md with new tool documentation
+- Added new sections: Sketch-Based Modeling, Aluminum Extrusions, Batch Operations
+
+### Technical Notes
+- All new tools follow the established RPC pattern (GUI thread queue)
+- New tools exposed via FreeCADConnection class
+- Full Python Sketcher API integration (Part, Sketcher modules)
+- Comprehensive error handling with helpful messages
+
+---
+
 ## [0.2.1] - 2025-11-13 - Fasteners Tool Addition
 
 ### Added

@@ -1,6 +1,6 @@
 [project]
 name = "freecad-mcp"
-version = "0.2.0"
+version = "0.3.0"
 description = "FreeCAD MCP Server - Model Context Protocol integration for AI-driven CAD operations"
 readme = "README.md"
 authors = [

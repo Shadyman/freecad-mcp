@@ -811,6 +811,722 @@ class FreeCADRPC:
             FreeCAD.Console.PrintError(error_msg + "\n")
             return error_msg
 
+    # ============================================================
+    # NEW SKETCH AND EXTRUSION METHODS
+    # ============================================================
+    
+    def create_sketch(
+        self,
+        doc_name: str,
+        name: str,
+        plane: str = "XY",
+        origin: dict[str, float] = None,
+        body_name: str = None
+    ) -> dict[str, Any]:
+        """Create a new sketch on a specified plane.
+        
+        Args:
+            doc_name: Document name
+            name: Sketch name
+            plane: Plane to create sketch on - "XY", "XZ", or "YZ"
+            origin: Optional origin offset {x, y, z}
+            body_name: Optional PartDesign Body to add sketch to
+        
+        Returns:
+            Success status and sketch name
+        """
+        rpc_request_queue.put(
+            lambda: self._create_sketch_gui(doc_name, name, plane, origin, body_name)
+        )
+        res = rpc_response_queue.get()
+        if isinstance(res, str):
+            return {"success": False, "error": res}
+        return {"success": True, "sketch_name": res["sketch_name"], "message": res["message"]}
+    
+    def _create_sketch_gui(
+        self,
+        doc_name: str,
+        name: str,
+        plane: str,
+        origin: dict[str, float],
+        body_name: str
+    ):
+        """Create sketch in GUI thread"""
+        try:
+            import Part
+            import Sketcher
+            
+            doc = FreeCAD.getDocument(doc_name)
+            if not doc:
+                return f"Document '{doc_name}' not found."
+            
+            # Get or create body if specified
+            body = None
+            if body_name:
+                body = doc.getObject(body_name)
+                if not body:
+                    # Create body if it doesn't exist
+                    body = doc.addObject('PartDesign::Body', body_name)
+                    FreeCAD.Console.PrintMessage(f"Created PartDesign Body '{body_name}'.\n")
+            
+            # Create sketch
+            if body:
+                sketch = body.newObject('Sketcher::SketchObject', name)
+            else:
+                sketch = doc.addObject('Sketcher::SketchObject', name)
+            
+            # Set placement based on plane
+            origin_x = origin.get("x", 0) if origin else 0
+            origin_y = origin.get("y", 0) if origin else 0
+            origin_z = origin.get("z", 0) if origin else 0
+            
+            if plane.upper() == "XY":
+                # Default - no rotation needed
+                sketch.Placement = FreeCAD.Placement(
+                    FreeCAD.Vector(origin_x, origin_y, origin_z),
+                    FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 0)
+                )
+            elif plane.upper() == "XZ":
+                # Rotate 90° around X axis
+                sketch.Placement = FreeCAD.Placement(
+                    FreeCAD.Vector(origin_x, origin_y, origin_z),
+                    FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 90)
+                )
+            elif plane.upper() == "YZ":
+                # Rotate 90° around Y axis
+                sketch.Placement = FreeCAD.Placement(
+                    FreeCAD.Vector(origin_x, origin_y, origin_z),
+                    FreeCAD.Rotation(FreeCAD.Vector(0, 1, 0), -90)
+                )
+            else:
+                return f"Invalid plane '{plane}'. Use 'XY', 'XZ', or 'YZ'."
+            
+            doc.recompute()
+            FreeCAD.Console.PrintMessage(f"Sketch '{name}' created on {plane} plane.\n")
+            return {"sketch_name": name, "message": f"Sketch created on {plane} plane"}
+            
+        except Exception as e:
+            error_msg = f"Failed to create sketch: {str(e)}"
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+    
+    def add_sketch_geometry(
+        self,
+        doc_name: str,
+        sketch_name: str,
+        geometry: list[dict[str, Any]],
+        construction: bool = False
+    ) -> dict[str, Any]:
+        """Add geometry to a sketch.
+        
+        Args:
+            doc_name: Document name
+            sketch_name: Sketch name
+            geometry: List of geometry definitions:
+                - {"type": "line", "x1": 0, "y1": 0, "x2": 10, "y2": 0}
+                - {"type": "rectangle", "x": -10, "y": -10, "width": 20, "height": 20}
+                - {"type": "circle", "cx": 0, "cy": 0, "radius": 5}
+                - {"type": "arc", "cx": 0, "cy": 0, "radius": 5, "start_angle": 0, "end_angle": 90}
+            construction: Whether geometry is construction geometry
+        
+        Returns:
+            Success status and geometry IDs
+        """
+        rpc_request_queue.put(
+            lambda: self._add_sketch_geometry_gui(doc_name, sketch_name, geometry, construction)
+        )
+        res = rpc_response_queue.get()
+        if isinstance(res, str):
+            return {"success": False, "error": res}
+        return {"success": True, "geometry_ids": res["geometry_ids"], "message": res["message"]}
+    
+    def _add_sketch_geometry_gui(
+        self,
+        doc_name: str,
+        sketch_name: str,
+        geometry: list[dict[str, Any]],
+        construction: bool
+    ):
+        """Add geometry to sketch in GUI thread"""
+        try:
+            import Part
+            import Sketcher
+            import math
+            
+            doc = FreeCAD.getDocument(doc_name)
+            if not doc:
+                return f"Document '{doc_name}' not found."
+            
+            sketch = doc.getObject(sketch_name)
+            if not sketch:
+                return f"Sketch '{sketch_name}' not found."
+            
+            if not hasattr(sketch, 'addGeometry'):
+                return f"Object '{sketch_name}' is not a valid sketch."
+            
+            geometry_ids = []
+            
+            for geom in geometry:
+                geom_type = geom.get("type", "").lower()
+                
+                if geom_type == "line":
+                    x1 = geom.get("x1", 0)
+                    y1 = geom.get("y1", 0)
+                    x2 = geom.get("x2", 0)
+                    y2 = geom.get("y2", 0)
+                    line = Part.LineSegment(
+                        FreeCAD.Vector(x1, y1, 0),
+                        FreeCAD.Vector(x2, y2, 0)
+                    )
+                    gid = sketch.addGeometry(line, construction)
+                    geometry_ids.append(gid)
+                    
+                elif geom_type == "rectangle":
+                    x = geom.get("x", 0)
+                    y = geom.get("y", 0)
+                    w = geom.get("width", 10)
+                    h = geom.get("height", 10)
+                    # Create 4 lines for rectangle
+                    l1 = Part.LineSegment(FreeCAD.Vector(x, y, 0), FreeCAD.Vector(x + w, y, 0))
+                    l2 = Part.LineSegment(FreeCAD.Vector(x + w, y, 0), FreeCAD.Vector(x + w, y + h, 0))
+                    l3 = Part.LineSegment(FreeCAD.Vector(x + w, y + h, 0), FreeCAD.Vector(x, y + h, 0))
+                    l4 = Part.LineSegment(FreeCAD.Vector(x, y + h, 0), FreeCAD.Vector(x, y, 0))
+                    
+                    id1 = sketch.addGeometry(l1, construction)
+                    id2 = sketch.addGeometry(l2, construction)
+                    id3 = sketch.addGeometry(l3, construction)
+                    id4 = sketch.addGeometry(l4, construction)
+                    
+                    # Add coincident constraints to close rectangle
+                    sketch.addConstraint(Sketcher.Constraint('Coincident', id1, 2, id2, 1))
+                    sketch.addConstraint(Sketcher.Constraint('Coincident', id2, 2, id3, 1))
+                    sketch.addConstraint(Sketcher.Constraint('Coincident', id3, 2, id4, 1))
+                    sketch.addConstraint(Sketcher.Constraint('Coincident', id4, 2, id1, 1))
+                    
+                    geometry_ids.extend([id1, id2, id3, id4])
+                    
+                elif geom_type == "circle":
+                    cx = geom.get("cx", 0)
+                    cy = geom.get("cy", 0)
+                    r = geom.get("radius", 5)
+                    circle = Part.Circle(
+                        FreeCAD.Vector(cx, cy, 0),
+                        FreeCAD.Vector(0, 0, 1),
+                        r
+                    )
+                    gid = sketch.addGeometry(circle, construction)
+                    geometry_ids.append(gid)
+                    
+                elif geom_type == "arc":
+                    cx = geom.get("cx", 0)
+                    cy = geom.get("cy", 0)
+                    r = geom.get("radius", 5)
+                    start_angle = math.radians(geom.get("start_angle", 0))
+                    end_angle = math.radians(geom.get("end_angle", 90))
+                    
+                    arc = Part.ArcOfCircle(
+                        Part.Circle(
+                            FreeCAD.Vector(cx, cy, 0),
+                            FreeCAD.Vector(0, 0, 1),
+                            r
+                        ),
+                        start_angle,
+                        end_angle
+                    )
+                    gid = sketch.addGeometry(arc, construction)
+                    geometry_ids.append(gid)
+                    
+                else:
+                    return f"Unknown geometry type: '{geom_type}'"
+            
+            doc.recompute()
+            FreeCAD.Console.PrintMessage(
+                f"Added {len(geometry_ids)} geometry elements to sketch '{sketch_name}'.\n"
+            )
+            return {"geometry_ids": geometry_ids, "message": f"Added {len(geometry_ids)} geometry elements"}
+            
+        except Exception as e:
+            error_msg = f"Failed to add geometry: {str(e)}"
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+    
+    def add_sketch_constraints(
+        self,
+        doc_name: str,
+        sketch_name: str,
+        constraints: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Add constraints to a sketch.
+        
+        Args:
+            doc_name: Document name
+            sketch_name: Sketch name
+            constraints: List of constraint definitions:
+                - {"type": "horizontal", "geometry_id": 0}
+                - {"type": "vertical", "geometry_id": 0}
+                - {"type": "coincident", "id1": 0, "point1": 2, "id2": 1, "point2": 1}
+                - {"type": "distance", "geometry_id": 0, "value": 20.0}
+                - {"type": "radius", "geometry_id": 0, "value": 5.0}
+                - {"type": "equal", "id1": 0, "id2": 1}
+                - {"type": "perpendicular", "id1": 0, "id2": 1}
+                - {"type": "fix", "geometry_id": 0, "point": 1}  (point 1=start, 2=end, 3=center)
+        
+        Returns:
+            Success status and constraint count
+        """
+        rpc_request_queue.put(
+            lambda: self._add_sketch_constraints_gui(doc_name, sketch_name, constraints)
+        )
+        res = rpc_response_queue.get()
+        if isinstance(res, str):
+            return {"success": False, "error": res}
+        return {"success": True, "constraint_count": res["constraint_count"], "message": res["message"]}
+    
+    def _add_sketch_constraints_gui(
+        self,
+        doc_name: str,
+        sketch_name: str,
+        constraints: list[dict[str, Any]]
+    ):
+        """Add constraints to sketch in GUI thread"""
+        try:
+            import Sketcher
+            
+            doc = FreeCAD.getDocument(doc_name)
+            if not doc:
+                return f"Document '{doc_name}' not found."
+            
+            sketch = doc.getObject(sketch_name)
+            if not sketch:
+                return f"Sketch '{sketch_name}' not found."
+            
+            constraint_count = 0
+            
+            for c in constraints:
+                c_type = c.get("type", "").lower()
+                
+                if c_type == "horizontal":
+                    gid = c.get("geometry_id", 0)
+                    sketch.addConstraint(Sketcher.Constraint('Horizontal', gid))
+                    constraint_count += 1
+                    
+                elif c_type == "vertical":
+                    gid = c.get("geometry_id", 0)
+                    sketch.addConstraint(Sketcher.Constraint('Vertical', gid))
+                    constraint_count += 1
+                    
+                elif c_type == "coincident":
+                    id1 = c.get("id1", 0)
+                    pt1 = c.get("point1", 2)  # default: end point
+                    id2 = c.get("id2", 1)
+                    pt2 = c.get("point2", 1)  # default: start point
+                    sketch.addConstraint(Sketcher.Constraint('Coincident', id1, pt1, id2, pt2))
+                    constraint_count += 1
+                    
+                elif c_type == "distance":
+                    gid = c.get("geometry_id", 0)
+                    value = c.get("value", 10.0)
+                    sketch.addConstraint(Sketcher.Constraint('Distance', gid, value))
+                    constraint_count += 1
+                    
+                elif c_type == "radius":
+                    gid = c.get("geometry_id", 0)
+                    value = c.get("value", 5.0)
+                    sketch.addConstraint(Sketcher.Constraint('Radius', gid, value))
+                    constraint_count += 1
+                    
+                elif c_type == "equal":
+                    id1 = c.get("id1", 0)
+                    id2 = c.get("id2", 1)
+                    sketch.addConstraint(Sketcher.Constraint('Equal', id1, id2))
+                    constraint_count += 1
+                    
+                elif c_type == "perpendicular":
+                    id1 = c.get("id1", 0)
+                    id2 = c.get("id2", 1)
+                    sketch.addConstraint(Sketcher.Constraint('Perpendicular', id1, id2))
+                    constraint_count += 1
+                    
+                elif c_type == "parallel":
+                    id1 = c.get("id1", 0)
+                    id2 = c.get("id2", 1)
+                    sketch.addConstraint(Sketcher.Constraint('Parallel', id1, id2))
+                    constraint_count += 1
+                    
+                elif c_type == "fix":
+                    gid = c.get("geometry_id", 0)
+                    pt = c.get("point", 1)
+                    sketch.addConstraint(Sketcher.Constraint('Fixed', gid, pt))
+                    constraint_count += 1
+                    
+                elif c_type == "symmetric":
+                    id1 = c.get("id1", 0)
+                    pt1 = c.get("point1", 1)
+                    id2 = c.get("id2", 0)
+                    pt2 = c.get("point2", 2)
+                    axis = c.get("axis", "Y")
+                    # -1 = X-axis, -2 = Y-axis
+                    axis_id = -2 if axis.upper() == "Y" else -1
+                    sketch.addConstraint(Sketcher.Constraint('Symmetric', id1, pt1, id2, pt2, axis_id))
+                    constraint_count += 1
+                    
+                else:
+                    FreeCAD.Console.PrintWarning(f"Unknown constraint type: '{c_type}'\n")
+            
+            doc.recompute()
+            FreeCAD.Console.PrintMessage(
+                f"Added {constraint_count} constraints to sketch '{sketch_name}'.\n"
+            )
+            return {"constraint_count": constraint_count, "message": f"Added {constraint_count} constraints"}
+            
+        except Exception as e:
+            error_msg = f"Failed to add constraints: {str(e)}"
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+    
+    def create_extrusion(
+        self,
+        doc_name: str,
+        name: str,
+        sketch_name: str,
+        length: float,
+        symmetric: bool = False,
+        reversed: bool = False,
+        body_name: str = None
+    ) -> dict[str, Any]:
+        """Create an extrusion (Pad) from a sketch.
+        
+        Args:
+            doc_name: Document name
+            name: Name for the extrusion object
+            sketch_name: Name of the sketch to extrude
+            length: Extrusion length in mm
+            symmetric: If True, extrude half in each direction
+            reversed: If True, reverse extrusion direction
+            body_name: Optional PartDesign Body name
+        
+        Returns:
+            Success status and extrusion object name
+        """
+        rpc_request_queue.put(
+            lambda: self._create_extrusion_gui(
+                doc_name, name, sketch_name, length, symmetric, reversed, body_name
+            )
+        )
+        res = rpc_response_queue.get()
+        if isinstance(res, str):
+            return {"success": False, "error": res}
+        return {"success": True, "object_name": res["object_name"], "message": res["message"]}
+    
+    def _create_extrusion_gui(
+        self,
+        doc_name: str,
+        name: str,
+        sketch_name: str,
+        length: float,
+        symmetric: bool,
+        reversed: bool,
+        body_name: str
+    ):
+        """Create extrusion in GUI thread"""
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+            if not doc:
+                return f"Document '{doc_name}' not found."
+            
+            sketch = doc.getObject(sketch_name)
+            if not sketch:
+                return f"Sketch '{sketch_name}' not found."
+            
+            # Get or find body
+            body = None
+            if body_name:
+                body = doc.getObject(body_name)
+            else:
+                # Try to find the body that contains the sketch
+                for obj in doc.Objects:
+                    if obj.TypeId == 'PartDesign::Body':
+                        if hasattr(obj, 'Group') and sketch in obj.Group:
+                            body = obj
+                            break
+            
+            # Create Pad
+            if body:
+                pad = doc.addObject("PartDesign::Pad", name)
+                body.addObject(pad)
+            else:
+                pad = doc.addObject("PartDesign::Pad", name)
+            
+            pad.Profile = sketch
+            pad.Length = length
+            pad.Reversed = reversed
+            pad.Midplane = symmetric
+            
+            # Hide sketch after extrusion
+            if hasattr(sketch, 'ViewObject') and sketch.ViewObject:
+                sketch.ViewObject.Visibility = False
+            
+            doc.recompute()
+            
+            FreeCAD.Console.PrintMessage(
+                f"Extrusion '{name}' created from sketch '{sketch_name}' (length={length}mm).\n"
+            )
+            return {
+                "object_name": name,
+                "message": f"Extrusion created with length {length}mm"
+            }
+            
+        except Exception as e:
+            error_msg = f"Failed to create extrusion: {str(e)}"
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+    
+    def create_2020_extrusion(
+        self,
+        doc_name: str,
+        name: str,
+        length: float,
+        position: dict[str, float] = None,
+        direction: str = "Z",
+        color: list[float] = None,
+        simplified: bool = True
+    ) -> dict[str, Any]:
+        """Create a 2020 aluminum extrusion profile.
+        
+        Args:
+            doc_name: Document name
+            name: Object name
+            length: Extrusion length in mm
+            position: Optional position {x, y, z}
+            direction: Extrusion axis - "X", "Y", or "Z"
+            color: Optional RGBA color [R, G, B, A]
+            simplified: If True, use simple 20x20 box (fast). If False, create T-slot profile.
+        
+        Returns:
+            Success status and object name
+        """
+        rpc_request_queue.put(
+            lambda: self._create_2020_extrusion_gui(
+                doc_name, name, length, position, direction, color, simplified
+            )
+        )
+        res = rpc_response_queue.get()
+        if isinstance(res, str):
+            return {"success": False, "error": res}
+        return {"success": True, "object_name": res["object_name"], "message": res["message"]}
+    
+    def _create_2020_extrusion_gui(
+        self,
+        doc_name: str,
+        name: str,
+        length: float,
+        position: dict[str, float],
+        direction: str,
+        color: list[float],
+        simplified: bool
+    ):
+        """Create 2020 extrusion in GUI thread"""
+        try:
+            import Part
+            
+            doc = FreeCAD.getDocument(doc_name)
+            if not doc:
+                return f"Document '{doc_name}' not found."
+            
+            pos_x = position.get("x", 0) if position else 0
+            pos_y = position.get("y", 0) if position else 0
+            pos_z = position.get("z", 0) if position else 0
+            
+            if simplified:
+                # Create simple 20x20mm box
+                if direction.upper() == "Z":
+                    obj = doc.addObject("Part::Box", name)
+                    obj.Length = 20
+                    obj.Width = 20
+                    obj.Height = length
+                    # Center the profile
+                    obj.Placement.Base = FreeCAD.Vector(pos_x - 10, pos_y - 10, pos_z)
+                elif direction.upper() == "Y":
+                    obj = doc.addObject("Part::Box", name)
+                    obj.Length = 20
+                    obj.Width = length
+                    obj.Height = 20
+                    obj.Placement.Base = FreeCAD.Vector(pos_x - 10, pos_y, pos_z - 10)
+                elif direction.upper() == "X":
+                    obj = doc.addObject("Part::Box", name)
+                    obj.Length = length
+                    obj.Width = 20
+                    obj.Height = 20
+                    obj.Placement.Base = FreeCAD.Vector(pos_x, pos_y - 10, pos_z - 10)
+                else:
+                    return f"Invalid direction '{direction}'. Use 'X', 'Y', or 'Z'."
+            else:
+                # Create more detailed T-slot profile
+                # 2020 profile: 20x20mm outer, with ~6mm T-slots and ~5mm center bore
+                size = 20.0
+                slot_w = 6.0
+                slot_d = 6.0
+                bore_r = 2.5
+                half = size / 2.0
+                
+                # Create outer wire
+                outer = Part.makePolygon([
+                    FreeCAD.Vector(-half, -half, 0),
+                    FreeCAD.Vector(half, -half, 0),
+                    FreeCAD.Vector(half, half, 0),
+                    FreeCAD.Vector(-half, half, 0),
+                    FreeCAD.Vector(-half, -half, 0)
+                ])
+                
+                # Create face and extrude
+                face = Part.Face(outer)
+                
+                # Cut center bore
+                bore = Part.makeCylinder(bore_r, length)
+                face_solid = face.extrude(FreeCAD.Vector(0, 0, length))
+                result = face_solid.cut(bore)
+                
+                # Create Part::Feature
+                obj = doc.addObject("Part::Feature", name)
+                obj.Shape = result
+                
+                # Set placement and rotation based on direction
+                if direction.upper() == "Z":
+                    obj.Placement.Base = FreeCAD.Vector(pos_x, pos_y, pos_z)
+                elif direction.upper() == "Y":
+                    obj.Placement = FreeCAD.Placement(
+                        FreeCAD.Vector(pos_x, pos_y, pos_z),
+                        FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 90)
+                    )
+                elif direction.upper() == "X":
+                    obj.Placement = FreeCAD.Placement(
+                        FreeCAD.Vector(pos_x, pos_y, pos_z),
+                        FreeCAD.Rotation(FreeCAD.Vector(0, 1, 0), -90)
+                    )
+            
+            # Apply color
+            if color and hasattr(obj, 'ViewObject') and obj.ViewObject:
+                obj.ViewObject.ShapeColor = tuple(color[:4] if len(color) >= 4 else color + [1.0])
+            elif hasattr(obj, 'ViewObject') and obj.ViewObject:
+                # Default aluminum gray
+                obj.ViewObject.ShapeColor = (0.7, 0.7, 0.75, 1.0)
+            
+            # Ensure visibility
+            if hasattr(obj, 'ViewObject') and obj.ViewObject:
+                obj.ViewObject.Visibility = True
+            
+            doc.recompute()
+            
+            FreeCAD.Console.PrintMessage(
+                f"2020 extrusion '{name}' created (length={length}mm, direction={direction}).\n"
+            )
+            return {
+                "object_name": name,
+                "message": f"2020 extrusion created ({length}mm along {direction} axis)"
+            }
+            
+        except Exception as e:
+            error_msg = f"Failed to create 2020 extrusion: {str(e)}"
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+    
+    def batch_position(
+        self,
+        doc_name: str,
+        objects: list[str],
+        offset: dict[str, float] = None,
+        position: dict[str, float] = None,
+        absolute: bool = False
+    ) -> dict[str, Any]:
+        """Update positions of multiple objects at once.
+        
+        Args:
+            doc_name: Document name
+            objects: List of object names to reposition
+            offset: Relative offset to apply {x, y, z} - used when absolute=False
+            position: Absolute position to set {x, y, z} - used when absolute=True
+            absolute: If True, set absolute position. If False, apply relative offset.
+        
+        Returns:
+            Success status and update count
+        """
+        rpc_request_queue.put(
+            lambda: self._batch_position_gui(doc_name, objects, offset, position, absolute)
+        )
+        res = rpc_response_queue.get()
+        if isinstance(res, str):
+            return {"success": False, "error": res}
+        return {"success": True, "updated_count": res["updated_count"], "message": res["message"]}
+    
+    def _batch_position_gui(
+        self,
+        doc_name: str,
+        objects: list[str],
+        offset: dict[str, float],
+        position: dict[str, float],
+        absolute: bool
+    ):
+        """Batch update positions in GUI thread"""
+        try:
+            doc = FreeCAD.getDocument(doc_name)
+            if not doc:
+                return f"Document '{doc_name}' not found."
+            
+            updated_count = 0
+            not_found = []
+            
+            for obj_name in objects:
+                obj = doc.getObject(obj_name)
+                if not obj:
+                    not_found.append(obj_name)
+                    continue
+                
+                if not hasattr(obj, 'Placement'):
+                    FreeCAD.Console.PrintWarning(
+                        f"Object '{obj_name}' has no Placement property, skipping.\n"
+                    )
+                    continue
+                
+                current = obj.Placement.Base
+                
+                if absolute and position:
+                    # Set absolute position
+                    new_pos = FreeCAD.Vector(
+                        position.get("x", current.x),
+                        position.get("y", current.y),
+                        position.get("z", current.z)
+                    )
+                elif offset:
+                    # Apply relative offset
+                    new_pos = FreeCAD.Vector(
+                        current.x + offset.get("x", 0),
+                        current.y + offset.get("y", 0),
+                        current.z + offset.get("z", 0)
+                    )
+                else:
+                    continue
+                
+                # Preserve rotation
+                obj.Placement = FreeCAD.Placement(
+                    new_pos,
+                    obj.Placement.Rotation
+                )
+                updated_count += 1
+            
+            doc.recompute()
+            
+            msg = f"Updated {updated_count} of {len(objects)} objects"
+            if not_found:
+                msg += f". Not found: {', '.join(not_found)}"
+            
+            FreeCAD.Console.PrintMessage(msg + "\n")
+            return {"updated_count": updated_count, "message": msg}
+            
+        except Exception as e:
+            error_msg = f"Failed to batch update positions: {str(e)}"
+            FreeCAD.Console.PrintError(error_msg + "\n")
+            return error_msg
+
     def _save_active_screenshot(self, save_path: str, view_name: str = "Isometric"):
         try:
             view = FreeCADGui.ActiveDocument.ActiveView

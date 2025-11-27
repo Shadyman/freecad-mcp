@@ -139,6 +139,71 @@ else:
     ) -> dict[str, Any]:
         return self.server.create_fastener(doc_name, name, fastener_type, position, attach_to, diameter, length)
 
+    # ============================================================
+    # NEW SKETCH AND EXTRUSION METHODS
+    # ============================================================
+    
+    def create_sketch(
+        self,
+        doc_name: str,
+        name: str,
+        plane: str = "XY",
+        origin: dict[str, float] = None,
+        body_name: str = None
+    ) -> dict[str, Any]:
+        return self.server.create_sketch(doc_name, name, plane, origin, body_name)
+    
+    def add_sketch_geometry(
+        self,
+        doc_name: str,
+        sketch_name: str,
+        geometry: list[dict[str, Any]],
+        construction: bool = False
+    ) -> dict[str, Any]:
+        return self.server.add_sketch_geometry(doc_name, sketch_name, geometry, construction)
+    
+    def add_sketch_constraints(
+        self,
+        doc_name: str,
+        sketch_name: str,
+        constraints: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        return self.server.add_sketch_constraints(doc_name, sketch_name, constraints)
+    
+    def create_extrusion(
+        self,
+        doc_name: str,
+        name: str,
+        sketch_name: str,
+        length: float,
+        symmetric: bool = False,
+        reversed: bool = False,
+        body_name: str = None
+    ) -> dict[str, Any]:
+        return self.server.create_extrusion(doc_name, name, sketch_name, length, symmetric, reversed, body_name)
+    
+    def create_2020_extrusion(
+        self,
+        doc_name: str,
+        name: str,
+        length: float,
+        position: dict[str, float] = None,
+        direction: str = "Z",
+        color: list[float] = None,
+        simplified: bool = True
+    ) -> dict[str, Any]:
+        return self.server.create_2020_extrusion(doc_name, name, length, position, direction, color, simplified)
+    
+    def batch_position(
+        self,
+        doc_name: str,
+        objects: list[str],
+        offset: dict[str, float] = None,
+        position: dict[str, float] = None,
+        absolute: bool = False
+    ) -> dict[str, Any]:
+        return self.server.batch_position(doc_name, objects, offset, position, absolute)
+
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
@@ -1071,6 +1136,541 @@ def create_fastener(
         logger.error(f"Failed to create fastener: {str(e)}")
         return [
             TextContent(type="text", text=f"Failed to create fastener: {str(e)}")
+        ]
+
+
+# ============================================================
+# NEW SKETCH AND EXTRUSION TOOLS
+# ============================================================
+
+@mcp.tool()
+def create_sketch(
+    ctx: Context,
+    doc_name: str,
+    name: str,
+    plane: Literal["XY", "XZ", "YZ"] = "XY",
+    origin_x: float = 0,
+    origin_y: float = 0,
+    origin_z: float = 0,
+    body_name: str = None
+) -> list[TextContent | ImageContent]:
+    """Create a new sketch on a specified plane.
+
+    This tool creates a Sketcher workbench sketch that can be used for parametric
+    2D drawing. After creating a sketch, use add_sketch_geometry to add shapes
+    and add_sketch_constraints to add constraints.
+
+    Args:
+        doc_name: The name of the document to create the sketch in.
+        name: The name for the sketch object.
+        plane: The plane to create the sketch on - "XY", "XZ", or "YZ" (default: "XY").
+        origin_x: X offset of the sketch origin (default: 0).
+        origin_y: Y offset of the sketch origin (default: 0).
+        origin_z: Z offset of the sketch origin (default: 0).
+        body_name: Optional PartDesign Body to add sketch to. If provided and the
+            body doesn't exist, it will be created.
+
+    Returns:
+        A message indicating success or failure and a screenshot.
+
+    Examples:
+        Create a sketch on XZ plane for a vertical profile:
+        ```json
+        {
+            "doc_name": "MyDocument",
+            "name": "Profile_2020",
+            "plane": "XZ"
+        }
+        ```
+
+        Create a sketch inside a PartDesign Body:
+        ```json
+        {
+            "doc_name": "MyDocument",
+            "name": "BaseSketch",
+            "plane": "XY",
+            "body_name": "Body"
+        }
+        ```
+    """
+    freecad = get_freecad_connection()
+    try:
+        origin = {"x": origin_x, "y": origin_y, "z": origin_z}
+        res = freecad.create_sketch(doc_name, name, plane, origin, body_name)
+        screenshot = freecad.get_active_screenshot()
+
+        if res["success"]:
+            response = [
+                TextContent(
+                    type="text",
+                    text=f"Sketch '{res['sketch_name']}' created on {plane} plane. "
+                         f"Use add_sketch_geometry to add shapes."
+                )
+            ]
+            return add_screenshot_if_available(response, screenshot)
+        else:
+            response = [
+                TextContent(type="text", text=f"Failed to create sketch: {res['error']}")
+            ]
+            return add_screenshot_if_available(response, screenshot)
+    except Exception as e:
+        logger.error(f"Failed to create sketch: {str(e)}")
+        return [
+            TextContent(type="text", text=f"Failed to create sketch: {str(e)}")
+        ]
+
+
+@mcp.tool()
+def add_sketch_geometry(
+    ctx: Context,
+    doc_name: str,
+    sketch_name: str,
+    geometry: list[dict[str, Any]],
+    construction: bool = False
+) -> list[TextContent | ImageContent]:
+    """Add geometry elements to a sketch.
+
+    This tool adds lines, rectangles, circles, and arcs to an existing sketch.
+    Geometry elements are identified by IDs that can be used with add_sketch_constraints.
+
+    Args:
+        doc_name: The name of the document containing the sketch.
+        sketch_name: The name of the sketch to add geometry to.
+        geometry: List of geometry definitions. Each item is a dict with a "type" key:
+            - {"type": "line", "x1": 0, "y1": 0, "x2": 10, "y2": 0}
+            - {"type": "rectangle", "x": -10, "y": -10, "width": 20, "height": 20}
+            - {"type": "circle", "cx": 0, "cy": 0, "radius": 5}
+            - {"type": "arc", "cx": 0, "cy": 0, "radius": 5, "start_angle": 0, "end_angle": 90}
+        construction: If True, creates construction geometry (not used for extrusion).
+
+    Returns:
+        A message with geometry IDs and a screenshot.
+
+    Examples:
+        Add a 20x20mm rectangle centered at origin:
+        ```json
+        {
+            "doc_name": "MyDocument",
+            "sketch_name": "Profile_2020",
+            "geometry": [
+                {"type": "rectangle", "x": -10, "y": -10, "width": 20, "height": 20}
+            ]
+        }
+        ```
+
+        Add a circle for a bore hole:
+        ```json
+        {
+            "doc_name": "MyDocument",
+            "sketch_name": "Profile_2020",
+            "geometry": [
+                {"type": "circle", "cx": 0, "cy": 0, "radius": 2.5}
+            ]
+        }
+        ```
+
+        Add multiple geometry elements:
+        ```json
+        {
+            "doc_name": "MyDocument",
+            "sketch_name": "MySketch",
+            "geometry": [
+                {"type": "rectangle", "x": -10, "y": -10, "width": 20, "height": 20},
+                {"type": "circle", "cx": 0, "cy": 0, "radius": 2.5}
+            ]
+        }
+        ```
+    """
+    freecad = get_freecad_connection()
+    try:
+        res = freecad.add_sketch_geometry(doc_name, sketch_name, geometry, construction)
+        screenshot = freecad.get_active_screenshot()
+
+        if res["success"]:
+            response = [
+                TextContent(
+                    type="text",
+                    text=f"Added {len(res['geometry_ids'])} geometry elements. "
+                         f"IDs: {res['geometry_ids']}. "
+                         f"Use these IDs with add_sketch_constraints if needed."
+                )
+            ]
+            return add_screenshot_if_available(response, screenshot)
+        else:
+            response = [
+                TextContent(type="text", text=f"Failed to add geometry: {res['error']}")
+            ]
+            return add_screenshot_if_available(response, screenshot)
+    except Exception as e:
+        logger.error(f"Failed to add geometry: {str(e)}")
+        return [
+            TextContent(type="text", text=f"Failed to add geometry: {str(e)}")
+        ]
+
+
+@mcp.tool()
+def add_sketch_constraints(
+    ctx: Context,
+    doc_name: str,
+    sketch_name: str,
+    constraints: list[dict[str, Any]]
+) -> list[TextContent | ImageContent]:
+    """Add constraints to a sketch.
+
+    This tool adds geometric and dimensional constraints to sketch geometry.
+    Use geometry IDs from add_sketch_geometry to reference elements.
+
+    Args:
+        doc_name: The name of the document containing the sketch.
+        sketch_name: The name of the sketch to add constraints to.
+        constraints: List of constraint definitions. Each item has a "type" key:
+            - {"type": "horizontal", "geometry_id": 0}
+            - {"type": "vertical", "geometry_id": 0}
+            - {"type": "coincident", "id1": 0, "point1": 2, "id2": 1, "point2": 1}
+              (point 1=start, 2=end, 3=center)
+            - {"type": "distance", "geometry_id": 0, "value": 20.0}
+            - {"type": "radius", "geometry_id": 0, "value": 5.0}
+            - {"type": "equal", "id1": 0, "id2": 1}
+            - {"type": "perpendicular", "id1": 0, "id2": 1}
+            - {"type": "parallel", "id1": 0, "id2": 1}
+            - {"type": "symmetric", "id1": 0, "point1": 1, "id2": 0, "point2": 2, "axis": "Y"}
+
+    Returns:
+        A message with constraint count and a screenshot.
+
+    Examples:
+        Make a line horizontal with specific length:
+        ```json
+        {
+            "doc_name": "MyDocument",
+            "sketch_name": "MySketch",
+            "constraints": [
+                {"type": "horizontal", "geometry_id": 0},
+                {"type": "distance", "geometry_id": 0, "value": 20.0}
+            ]
+        }
+        ```
+
+        Set circle radius:
+        ```json
+        {
+            "doc_name": "MyDocument",
+            "sketch_name": "MySketch",
+            "constraints": [
+                {"type": "radius", "geometry_id": 4, "value": 2.5}
+            ]
+        }
+        ```
+    """
+    freecad = get_freecad_connection()
+    try:
+        res = freecad.add_sketch_constraints(doc_name, sketch_name, constraints)
+        screenshot = freecad.get_active_screenshot()
+
+        if res["success"]:
+            response = [
+                TextContent(
+                    type="text",
+                    text=f"Added {res['constraint_count']} constraints to sketch '{sketch_name}'."
+                )
+            ]
+            return add_screenshot_if_available(response, screenshot)
+        else:
+            response = [
+                TextContent(type="text", text=f"Failed to add constraints: {res['error']}")
+            ]
+            return add_screenshot_if_available(response, screenshot)
+    except Exception as e:
+        logger.error(f"Failed to add constraints: {str(e)}")
+        return [
+            TextContent(type="text", text=f"Failed to add constraints: {str(e)}")
+        ]
+
+
+@mcp.tool()
+def create_extrusion(
+    ctx: Context,
+    doc_name: str,
+    name: str,
+    sketch_name: str,
+    length: float,
+    symmetric: bool = False,
+    reversed: bool = False,
+    body_name: str = None
+) -> list[TextContent | ImageContent]:
+    """Create an extrusion (Pad) from a sketch.
+
+    This tool extrudes a 2D sketch into a 3D solid using PartDesign::Pad.
+    The sketch will be hidden after extrusion.
+
+    Args:
+        doc_name: The name of the document containing the sketch.
+        name: The name for the extrusion object.
+        sketch_name: The name of the sketch to extrude.
+        length: Extrusion length in mm.
+        symmetric: If True, extrude half the length in each direction (default: False).
+        reversed: If True, reverse the extrusion direction (default: False).
+        body_name: Optional PartDesign Body name. If the sketch is inside a Body,
+            the extrusion will be added to that Body.
+
+    Returns:
+        A message indicating success or failure and a screenshot.
+
+    Examples:
+        Extrude a profile 200mm:
+        ```json
+        {
+            "doc_name": "MyDocument",
+            "name": "Extrusion_200mm",
+            "sketch_name": "Profile_2020",
+            "length": 200
+        }
+        ```
+
+        Symmetric extrusion (100mm each direction):
+        ```json
+        {
+            "doc_name": "MyDocument",
+            "name": "SymmetricPad",
+            "sketch_name": "CenterSketch",
+            "length": 200,
+            "symmetric": true
+        }
+        ```
+    """
+    freecad = get_freecad_connection()
+    try:
+        res = freecad.create_extrusion(
+            doc_name, name, sketch_name, length, symmetric, reversed, body_name
+        )
+        screenshot = freecad.get_active_screenshot()
+
+        if res["success"]:
+            response = [
+                TextContent(
+                    type="text",
+                    text=f"Extrusion '{res['object_name']}' created successfully "
+                         f"(length={length}mm, symmetric={symmetric})"
+                )
+            ]
+            return add_screenshot_if_available(response, screenshot)
+        else:
+            response = [
+                TextContent(type="text", text=f"Failed to create extrusion: {res['error']}")
+            ]
+            return add_screenshot_if_available(response, screenshot)
+    except Exception as e:
+        logger.error(f"Failed to create extrusion: {str(e)}")
+        return [
+            TextContent(type="text", text=f"Failed to create extrusion: {str(e)}")
+        ]
+
+
+@mcp.tool()
+def create_2020_extrusion(
+    ctx: Context,
+    doc_name: str,
+    name: str,
+    length: float,
+    position_x: float = 0,
+    position_y: float = 0,
+    position_z: float = 0,
+    direction: Literal["X", "Y", "Z"] = "Z",
+    color_r: float = 0.7,
+    color_g: float = 0.7,
+    color_b: float = 0.75,
+    color_a: float = 1.0,
+    simplified: bool = True
+) -> list[TextContent | ImageContent]:
+    """Create a 2020 aluminum extrusion profile.
+
+    This is a convenience tool for creating 20mm × 20mm aluminum T-slot extrusion
+    profiles commonly used in frames, 3D printers, and CNC machines.
+
+    Args:
+        doc_name: The name of the document to create the extrusion in.
+        name: The name for the extrusion object.
+        length: Extrusion length in mm.
+        position_x: X coordinate of the extrusion center (default: 0).
+        position_y: Y coordinate of the extrusion center (default: 0).
+        position_z: Z coordinate of the extrusion start (default: 0).
+        direction: Extrusion axis - "X", "Y", or "Z" (default: "Z").
+        color_r: Red component 0.0-1.0 (default: 0.7 for aluminum gray).
+        color_g: Green component 0.0-1.0 (default: 0.7).
+        color_b: Blue component 0.0-1.0 (default: 0.75).
+        color_a: Alpha component 0.0-1.0 (default: 1.0).
+        simplified: If True, creates a simple 20x20 box (faster). If False,
+            creates a more detailed T-slot profile with center bore (default: True).
+
+    Returns:
+        A message indicating success or failure and a screenshot.
+
+    Examples:
+        Create a vertical post 266.7mm tall:
+        ```json
+        {
+            "doc_name": "MiniRack_Assembly_6U",
+            "name": "VerticalPost_FL",
+            "length": 266.7,
+            "position_x": 0,
+            "position_y": 0,
+            "position_z": 20,
+            "direction": "Z"
+        }
+        ```
+
+        Create a horizontal cross member:
+        ```json
+        {
+            "doc_name": "MiniRack_Assembly_6U",
+            "name": "CrossMember_Front_Top",
+            "length": 222.25,
+            "position_x": 20,
+            "position_y": 0,
+            "position_z": 286.7,
+            "direction": "X"
+        }
+        ```
+
+        Create with custom color (anodized black):
+        ```json
+        {
+            "doc_name": "MyFrame",
+            "name": "BlackPost",
+            "length": 300,
+            "direction": "Z",
+            "color_r": 0.1,
+            "color_g": 0.1,
+            "color_b": 0.1
+        }
+        ```
+    """
+    freecad = get_freecad_connection()
+    try:
+        position = {"x": position_x, "y": position_y, "z": position_z}
+        color = [color_r, color_g, color_b, color_a]
+        
+        res = freecad.create_2020_extrusion(
+            doc_name, name, length, position, direction, color, simplified
+        )
+        screenshot = freecad.get_active_screenshot()
+
+        if res["success"]:
+            response = [
+                TextContent(
+                    type="text",
+                    text=f"2020 extrusion '{res['object_name']}' created successfully "
+                         f"(length={length}mm along {direction} axis)"
+                )
+            ]
+            return add_screenshot_if_available(response, screenshot)
+        else:
+            response = [
+                TextContent(type="text", text=f"Failed to create 2020 extrusion: {res['error']}")
+            ]
+            return add_screenshot_if_available(response, screenshot)
+    except Exception as e:
+        logger.error(f"Failed to create 2020 extrusion: {str(e)}")
+        return [
+            TextContent(type="text", text=f"Failed to create 2020 extrusion: {str(e)}")
+        ]
+
+
+@mcp.tool()
+def batch_position(
+    ctx: Context,
+    doc_name: str,
+    objects: list[str],
+    offset_x: float = 0,
+    offset_y: float = 0,
+    offset_z: float = 0,
+    position_x: float = None,
+    position_y: float = None,
+    position_z: float = None,
+    absolute: bool = False
+) -> list[TextContent | ImageContent]:
+    """Update positions of multiple objects at once.
+
+    This tool efficiently repositions multiple objects in a single operation,
+    solving the common problem of needing to move many related objects together.
+
+    Args:
+        doc_name: The name of the document containing the objects.
+        objects: List of object names to reposition.
+        offset_x: X offset to apply (used when absolute=False, default: 0).
+        offset_y: Y offset to apply (used when absolute=False, default: 0).
+        offset_z: Z offset to apply (used when absolute=False, default: 0).
+        position_x: Absolute X position (used when absolute=True).
+        position_y: Absolute Y position (used when absolute=True).
+        position_z: Absolute Z position (used when absolute=True).
+        absolute: If True, set absolute position. If False, apply relative offset.
+
+    Returns:
+        A message with update count and a screenshot.
+
+    Examples:
+        Move all trays up by 20mm:
+        ```json
+        {
+            "doc_name": "MiniRack_Assembly_6U",
+            "objects": ["Tray1_Assembly", "Tray2_Assembly", "Tray3_Assembly"],
+            "offset_z": 20
+        }
+        ```
+
+        Move objects to specific Y position:
+        ```json
+        {
+            "doc_name": "MiniRack_Assembly_6U",
+            "objects": ["Tray1_Assembly", "Tray2_Assembly"],
+            "position_y": -1.6,
+            "absolute": true
+        }
+        ```
+
+        Shift corner cubes 10mm in X and Y:
+        ```json
+        {
+            "doc_name": "MyAssembly",
+            "objects": ["Cube_FL", "Cube_FR", "Cube_BL", "Cube_BR"],
+            "offset_x": 10,
+            "offset_y": 10
+        }
+        ```
+    """
+    freecad = get_freecad_connection()
+    try:
+        offset = {"x": offset_x, "y": offset_y, "z": offset_z}
+        position = None
+        if absolute:
+            position = {}
+            if position_x is not None:
+                position["x"] = position_x
+            if position_y is not None:
+                position["y"] = position_y
+            if position_z is not None:
+                position["z"] = position_z
+        
+        res = freecad.batch_position(doc_name, objects, offset, position, absolute)
+        screenshot = freecad.get_active_screenshot()
+
+        if res["success"]:
+            response = [
+                TextContent(
+                    type="text",
+                    text=f"Batch position update: {res['message']}"
+                )
+            ]
+            return add_screenshot_if_available(response, screenshot)
+        else:
+            response = [
+                TextContent(type="text", text=f"Failed to batch update positions: {res['error']}")
+            ]
+            return add_screenshot_if_available(response, screenshot)
+    except Exception as e:
+        logger.error(f"Failed to batch update positions: {str(e)}")
+        return [
+            TextContent(type="text", text=f"Failed to batch update positions: {str(e)}")
         ]
 
 

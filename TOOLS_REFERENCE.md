@@ -1,7 +1,7 @@
 # FreeCAD MCP Tools Reference
 
-**Version**: 0.2.1
-**Last Updated**: 2025-11-13
+**Version**: 0.3.0
+**Last Updated**: 2025-11-26
 
 This document provides a complete reference for all tools available in the FreeCAD MCP server.
 
@@ -14,6 +14,9 @@ This document provides a complete reference for all tools available in the FreeC
 - [Object Manipulation](#object-manipulation)
 - [Boolean Operations](#boolean-operations)
 - [Geometry Convenience Tools](#geometry-convenience-tools)
+- [Sketch-Based Modeling](#sketch-based-modeling) *(NEW in v0.3.0)*
+- [Aluminum Extrusions](#aluminum-extrusions) *(NEW in v0.3.0)*
+- [Batch Operations](#batch-operations) *(NEW in v0.3.0)*
 - [Fasteners](#fasteners)
 - [Workbench Management](#workbench-management)
 - [Visualization](#visualization)
@@ -372,6 +375,253 @@ Simplified cylinder creation with intuitive parameters.
     "color_r": 0.0,
     "color_g": 0.0,
     "color_b": 1.0
+}
+```
+
+---
+
+## Sketch-Based Modeling
+
+*NEW in v0.3.0* - Parametric sketch-based workflow for complex profiles.
+
+### `create_sketch(doc_name, name, plane, origin_x, origin_y, origin_z, body_name)`
+
+Create a new sketch on a specified plane.
+
+**Why this tool?** Enables parametric design workflow using FreeCAD's Sketcher workbench. Sketches can be extruded into 3D solids using `create_extrusion`.
+
+**Parameters:**
+
+- `doc_name` (string): Document name
+- `name` (string): Sketch name
+- `plane` (string): "XY", "XZ", or "YZ" (default: "XY")
+- `origin_x` (float): X offset of sketch origin (default: 0)
+- `origin_y` (float): Y offset of sketch origin (default: 0)
+- `origin_z` (float): Z offset of sketch origin (default: 0)
+- `body_name` (string, optional): PartDesign Body to add sketch to
+
+**Example:**
+
+```json
+{
+    "doc_name": "MyDocument",
+    "name": "Profile_2020",
+    "plane": "XZ",
+    "body_name": "Body"
+}
+```
+
+### `add_sketch_geometry(doc_name, sketch_name, geometry, construction)`
+
+Add lines, rectangles, circles, and arcs to a sketch.
+
+**Parameters:**
+
+- `doc_name` (string): Document name
+- `sketch_name` (string): Target sketch name
+- `geometry` (array): List of geometry definitions
+- `construction` (boolean): If true, creates construction geometry (default: false)
+
+**Supported Geometry Types:**
+
+| Type | Properties |
+|------|------------|
+| `line` | `x1`, `y1`, `x2`, `y2` |
+| `rectangle` | `x`, `y`, `width`, `height` |
+| `circle` | `cx`, `cy`, `radius` |
+| `arc` | `cx`, `cy`, `radius`, `start_angle`, `end_angle` (degrees) |
+
+**Example - 20x20 rectangle with center hole:**
+
+```json
+{
+    "doc_name": "MyDocument",
+    "sketch_name": "Profile_2020",
+    "geometry": [
+        {"type": "rectangle", "x": -10, "y": -10, "width": 20, "height": 20},
+        {"type": "circle", "cx": 0, "cy": 0, "radius": 2.5}
+    ]
+}
+```
+
+### `add_sketch_constraints(doc_name, sketch_name, constraints)`
+
+Add geometric and dimensional constraints to sketch geometry.
+
+**Parameters:**
+
+- `doc_name` (string): Document name
+- `sketch_name` (string): Target sketch name
+- `constraints` (array): List of constraint definitions
+
+**Supported Constraint Types:**
+
+| Type | Properties | Description |
+|------|------------|-------------|
+| `horizontal` | `geometry_id` | Make line horizontal |
+| `vertical` | `geometry_id` | Make line vertical |
+| `distance` | `geometry_id`, `value` | Set line length |
+| `radius` | `geometry_id`, `value` | Set circle/arc radius |
+| `coincident` | `id1`, `point1`, `id2`, `point2` | Connect two points |
+| `equal` | `id1`, `id2` | Make two elements equal |
+| `perpendicular` | `id1`, `id2` | Make elements perpendicular |
+| `parallel` | `id1`, `id2` | Make elements parallel |
+| `symmetric` | `id1`, `point1`, `id2`, `point2`, `axis` | Make symmetric about axis |
+
+**Point indices:** 1=start, 2=end, 3=center
+
+**Example:**
+
+```json
+{
+    "doc_name": "MyDocument",
+    "sketch_name": "MySketch",
+    "constraints": [
+        {"type": "horizontal", "geometry_id": 0},
+        {"type": "distance", "geometry_id": 0, "value": 20.0},
+        {"type": "radius", "geometry_id": 4, "value": 2.5}
+    ]
+}
+```
+
+### `create_extrusion(doc_name, name, sketch_name, length, symmetric, reversed, body_name)`
+
+Extrude a sketch into a 3D solid using PartDesign::Pad.
+
+**Parameters:**
+
+- `doc_name` (string): Document name
+- `name` (string): Extrusion object name
+- `sketch_name` (string): Sketch to extrude
+- `length` (float): Extrusion length in mm
+- `symmetric` (boolean): Extrude half each direction (default: false)
+- `reversed` (boolean): Reverse direction (default: false)
+- `body_name` (string, optional): PartDesign Body name
+
+**Example:**
+
+```json
+{
+    "doc_name": "MyDocument",
+    "name": "Extrusion_200mm",
+    "sketch_name": "Profile_2020",
+    "length": 200
+}
+```
+
+---
+
+## Aluminum Extrusions
+
+*NEW in v0.3.0* - Convenience tools for aluminum extrusion profiles.
+
+### `create_2020_extrusion(doc_name, name, length, position_x, position_y, position_z, direction, color_*, simplified)`
+
+Create a 2020 (20mm × 20mm) aluminum T-slot extrusion profile.
+
+**Why this tool?** Simplifies creating aluminum frame members - no need for complex sketch + extrude workflow. Perfect for 3D printer frames, CNC machines, and rack systems.
+
+**Parameters:**
+
+- `doc_name` (string): Document name
+- `name` (string): Object name
+- `length` (float): Extrusion length in mm
+- `position_x/y/z` (float): Position of extrusion center (default: 0)
+- `direction` (string): Extrusion axis - "X", "Y", or "Z" (default: "Z")
+- `color_r/g/b/a` (float): RGBA color (default: aluminum gray 0.7, 0.7, 0.75, 1.0)
+- `simplified` (boolean): If true, creates simple box; if false, detailed T-slot profile (default: true)
+
+**Example - Vertical post:**
+
+```json
+{
+    "doc_name": "MiniRack_Assembly_6U",
+    "name": "VerticalPost_FL",
+    "length": 266.7,
+    "position_x": 0,
+    "position_y": 0,
+    "position_z": 20,
+    "direction": "Z"
+}
+```
+
+**Example - Horizontal member:**
+
+```json
+{
+    "doc_name": "MiniRack_Assembly_6U",
+    "name": "CrossMember_Front_Top",
+    "length": 222.25,
+    "position_x": 20,
+    "position_y": 0,
+    "position_z": 286.7,
+    "direction": "X"
+}
+```
+
+**Example - Anodized black extrusion:**
+
+```json
+{
+    "doc_name": "MyFrame",
+    "name": "BlackPost",
+    "length": 300,
+    "direction": "Z",
+    "color_r": 0.1,
+    "color_g": 0.1,
+    "color_b": 0.1
+}
+```
+
+---
+
+## Batch Operations
+
+*NEW in v0.3.0* - Efficient multi-object operations.
+
+### `batch_position(doc_name, objects, offset_x, offset_y, offset_z, position_x, position_y, position_z, absolute)`
+
+Update positions of multiple objects in a single operation.
+
+**Why this tool?** Solves the common problem of needing to move many related objects together. Instead of multiple `edit_object` calls, reposition everything at once.
+
+**Parameters:**
+
+- `doc_name` (string): Document name
+- `objects` (array): List of object names to reposition
+- `offset_x/y/z` (float): Relative offset (used when absolute=false)
+- `position_x/y/z` (float): Absolute position (used when absolute=true)
+- `absolute` (boolean): If true, set absolute position; if false, apply offset (default: false)
+
+**Example - Move all trays up by 20mm:**
+
+```json
+{
+    "doc_name": "MiniRack_Assembly_6U",
+    "objects": ["Tray1_Assembly", "Tray2_Assembly", "Tray3_Assembly", "Tray4_Assembly", "Tray5_Assembly", "Tray6_Assembly"],
+    "offset_z": 20
+}
+```
+
+**Example - Set absolute Y position:**
+
+```json
+{
+    "doc_name": "MiniRack_Assembly_6U",
+    "objects": ["Tray1_Assembly", "Tray2_Assembly"],
+    "position_y": -1.6,
+    "absolute": true
+}
+```
+
+**Example - Combined X and Y offset:**
+
+```json
+{
+    "doc_name": "MyAssembly",
+    "objects": ["Cube_FL", "Cube_FR", "Cube_BL", "Cube_BR"],
+    "offset_x": 10,
+    "offset_y": 10
 }
 ```
 
