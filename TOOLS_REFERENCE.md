@@ -515,7 +515,7 @@ Extrude a sketch into a 3D solid using PartDesign::Pad.
 
 *NEW in v0.3.0* - Convenience tools for aluminum extrusion profiles.
 
-### `create_2020_extrusion(doc_name, name, length, position_x, position_y, position_z, direction, color_*, simplified)`
+### `create_2020_extrusion(doc_name, name, length, position_x, position_y, position_z, direction, color_*, simplified, profile_variant, sealed_rotation)`
 
 Create a 2020 (20mm × 20mm) aluminum T-slot extrusion profile.
 
@@ -530,6 +530,17 @@ Create a 2020 (20mm × 20mm) aluminum T-slot extrusion profile.
 - `direction` (string): Extrusion axis - "X", "Y", or "Z" (default: "Z")
 - `color_r/g/b/a` (float): RGBA color (default: aluminum gray 0.7, 0.7, 0.75, 1.0)
 - `simplified` (boolean): If true, creates simple box; if false, detailed T-slot profile (default: true)
+- `profile_variant` (string): Profile type - "2020", "2020N1", "2020N2", "2020N3" (default: "2020")
+- `sealed_rotation` (int): Rotation of sealed faces - 0, 90, 180, or 270 degrees (default: 0)
+
+**Profile Variants:**
+
+| Variant | Slots | Description | Use Case |
+|---------|-------|-------------|----------|
+| `2020` | 4 | Standard - all sides have T-slots | Interior members, general framing |
+| `2020N1` | 3 | 1 smooth face, 3 T-slots | Single-sided panel attachment |
+| `2020N2` | 2 | 2 adjacent smooth faces (corner) | External corners, L-profiles |
+| `2020N3` | 1 | 3 smooth faces, 1 T-slot | Edge trim, single-track rails |
 
 **Example - Vertical post:**
 
@@ -570,6 +581,20 @@ Create a 2020 (20mm × 20mm) aluminum T-slot extrusion profile.
     "color_r": 0.1,
     "color_g": 0.1,
     "color_b": 0.1
+}
+```
+
+**Example - Corner post with 2020N2 profile (2 smooth adjacent sides):**
+
+```json
+{
+    "doc_name": "MiniRack_Assembly_6U",
+    "name": "CornerPost_FL",
+    "length": 300,
+    "direction": "Z",
+    "simplified": false,
+    "profile_variant": "2020N2",
+    "sealed_rotation": 0
 }
 ```
 

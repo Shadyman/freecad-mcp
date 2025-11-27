@@ -190,9 +190,14 @@ else:
         position: dict[str, float] = None,
         direction: str = "Z",
         color: list[float] = None,
-        simplified: bool = True
+        simplified: bool = True,
+        profile_variant: str = "2020",
+        sealed_rotation: int = 0
     ) -> dict[str, Any]:
-        return self.server.create_2020_extrusion(doc_name, name, length, position, direction, color, simplified)
+        return self.server.create_2020_extrusion(
+            doc_name, name, length, position, direction, color, simplified,
+            profile_variant, sealed_rotation
+        )
     
     def batch_position(
         self,
@@ -1480,7 +1485,9 @@ def create_2020_extrusion(
     color_g: float = 0.7,
     color_b: float = 0.75,
     color_a: float = 1.0,
-    simplified: bool = True
+    simplified: bool = True,
+    profile_variant: Literal["2020", "2020N1", "2020N2", "2020N3"] = "2020",
+    sealed_rotation: Literal[0, 90, 180, 270] = 0
 ) -> list[TextContent | ImageContent]:
     """Create a 2020 aluminum extrusion profile.
 
@@ -1501,6 +1508,13 @@ def create_2020_extrusion(
         color_a: Alpha component 0.0-1.0 (default: 1.0).
         simplified: If True, creates a simple 20x20 box (faster). If False,
             creates a more detailed T-slot profile with center bore (default: True).
+        profile_variant: Profile type based on number of sealed edges:
+            - "2020": Standard 4 T-slots (all sides open)
+            - "2020N1": 3 T-slots (1 smooth/sealed face)
+            - "2020N2": 2 T-slots (2 adjacent smooth faces for corners)
+            - "2020N3": 1 T-slot (3 smooth faces for edge trim)
+        sealed_rotation: Rotation of sealed faces in 90° increments (0, 90, 180, 270).
+            Controls which side(s) are sealed. For 2020N2, determines which corner.
 
     Returns:
         A message indicating success or failure and a screenshot.
@@ -1544,6 +1558,19 @@ def create_2020_extrusion(
             "color_b": 0.1
         }
         ```
+
+        Create corner extrusion with 2020N2 profile (2 smooth adjacent sides):
+        ```json
+        {
+            "doc_name": "MyFrame",
+            "name": "CornerPost_FL",
+            "length": 300,
+            "direction": "Z",
+            "simplified": false,
+            "profile_variant": "2020N2",
+            "sealed_rotation": 0
+        }
+        ```
     """
     freecad = get_freecad_connection()
     try:
@@ -1551,7 +1578,8 @@ def create_2020_extrusion(
         color = [color_r, color_g, color_b, color_a]
         
         res = freecad.create_2020_extrusion(
-            doc_name, name, length, position, direction, color, simplified
+            doc_name, name, length, position, direction, color, simplified,
+            profile_variant, sealed_rotation
         )
         screenshot = freecad.get_active_screenshot()
 

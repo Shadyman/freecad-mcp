@@ -1289,7 +1289,9 @@ class FreeCADRPC:
         position: dict[str, float] = None,
         direction: str = "Z",
         color: list[float] = None,
-        simplified: bool = True
+        simplified: bool = True,
+        profile_variant: str = "2020",
+        sealed_rotation: int = 0
     ) -> dict[str, Any]:
         """Create a 2020 aluminum extrusion profile.
         
@@ -1301,13 +1303,20 @@ class FreeCADRPC:
             direction: Extrusion axis - "X", "Y", or "Z"
             color: Optional RGBA color [R, G, B, A]
             simplified: If True, use simple 20x20 box (fast). If False, create T-slot profile.
+            profile_variant: Profile type - "2020" (4 slots), "2020N1" (3 slots),
+                            "2020N2" (2 adjacent slots), "2020N3" (1 slot)
+            sealed_rotation: Rotation of sealed faces in 90° increments (0, 90, 180, 270)
+                            For 2020N1: which face is sealed
+                            For 2020N2: which corner has the 2 sealed faces
+                            For 2020N3: which face has the slot
         
         Returns:
             Success status and object name
         """
         rpc_request_queue.put(
             lambda: self._create_2020_extrusion_gui(
-                doc_name, name, length, position, direction, color, simplified
+                doc_name, name, length, position, direction, color, simplified,
+                profile_variant, sealed_rotation
             )
         )
         res = rpc_response_queue.get()
@@ -1323,7 +1332,9 @@ class FreeCADRPC:
         position: dict[str, float],
         direction: str,
         color: list[float],
-        simplified: bool
+        simplified: bool,
+        profile_variant: str = "2020",
+        sealed_rotation: int = 0
     ):
         """Create 2020 extrusion in GUI thread"""
         try:
@@ -1336,6 +1347,9 @@ class FreeCADRPC:
             pos_x = position.get("x", 0) if position else 0
             pos_y = position.get("y", 0) if position else 0
             pos_z = position.get("z", 0) if position else 0
+            
+            # Normalize profile variant
+            variant = profile_variant.upper().replace("-", "")
             
             if simplified:
                 # Create simple 20x20mm box
@@ -1361,34 +1375,122 @@ class FreeCADRPC:
                 else:
                     return f"Invalid direction '{direction}'. Use 'X', 'Y', or 'Z'."
             else:
-                # Create more detailed T-slot profile
-                # 2020 profile: 20x20mm outer, with ~6mm T-slots and ~5mm center bore
+                # Create detailed T-slot profile based on variant
+                # 2020 profile dimensions (from 2020N2 spec):
+                # - 20x20mm outer
+                # - 6.1mm slot opening
+                # - 11mm T-track width
+                # - 5mm center bore
+                # - 1.5mm corner radius
                 size = 20.0
-                slot_w = 6.0
-                slot_d = 6.0
-                bore_r = 2.5
                 half = size / 2.0
+                slot_opening = 6.1  # Slot opening width
+                slot_depth = 1.8    # Depth to T-track
+                track_width = 11.0  # Internal T-track width
+                track_depth = 6.0   # Total slot depth from surface
+                bore_r = 2.5        # Center bore radius
+                corner_r = 1.5      # Corner radius
+                wall_t = 1.5        # Wall thickness
                 
-                # Create outer wire
-                outer = Part.makePolygon([
+                # Determine which sides have slots based on variant
+                # Sides: 0=bottom (-Y), 1=right (+X), 2=top (+Y), 3=left (-X)
+                if variant == "2020":
+                    slot_sides = [0, 1, 2, 3]  # All 4 sides have slots
+                elif variant == "2020N1":
+                    # 1 sealed, 3 slots - sealed side rotated by sealed_rotation
+                    sealed_side = (sealed_rotation // 90) % 4
+                    slot_sides = [s for s in [0, 1, 2, 3] if s != sealed_side]
+                elif variant == "2020N2":
+                    # 2 adjacent sealed, 2 slots - forms a corner
+                    base = (sealed_rotation // 90) % 4
+                    sealed_sides = [base, (base + 1) % 4]
+                    slot_sides = [s for s in [0, 1, 2, 3] if s not in sealed_sides]
+                elif variant == "2020N3":
+                    # 3 sealed, 1 slot - only one side has slot
+                    slot_side = (sealed_rotation // 90) % 4
+                    slot_sides = [slot_side]
+                else:
+                    # Default to full 2020
+                    slot_sides = [0, 1, 2, 3]
+                
+                # Build the profile as a 2D wire then extrude
+                # Start with outer square and add T-slot cutouts
+                from math import sqrt
+                
+                # Create outer square profile
+                outer_wire = Part.makePolygon([
                     FreeCAD.Vector(-half, -half, 0),
                     FreeCAD.Vector(half, -half, 0),
                     FreeCAD.Vector(half, half, 0),
                     FreeCAD.Vector(-half, half, 0),
                     FreeCAD.Vector(-half, -half, 0)
                 ])
+                outer_face = Part.Face(outer_wire)
                 
-                # Create face and extrude
-                face = Part.Face(outer)
+                # Extrude the outer shape
+                solid = outer_face.extrude(FreeCAD.Vector(0, 0, length))
                 
                 # Cut center bore
                 bore = Part.makeCylinder(bore_r, length)
-                face_solid = face.extrude(FreeCAD.Vector(0, 0, length))
-                result = face_solid.cut(bore)
+                solid = solid.cut(bore)
+                
+                # Cut T-slots on active sides
+                slot_half = slot_opening / 2.0
+                track_half = track_width / 2.0
+                
+                for side in slot_sides:
+                    # Create T-slot cutout shape
+                    # T-slot: narrow opening, wider track inside
+                    if side == 0:  # Bottom (-Y)
+                        # Slot opening
+                        slot_box = Part.makeBox(
+                            slot_opening, slot_depth, length,
+                            FreeCAD.Vector(-slot_half, -half, 0)
+                        )
+                        # T-track (wider part inside)
+                        track_box = Part.makeBox(
+                            track_width, track_depth - slot_depth, length,
+                            FreeCAD.Vector(-track_half, -half + slot_depth, 0)
+                        )
+                        solid = solid.cut(slot_box)
+                        solid = solid.cut(track_box)
+                    elif side == 1:  # Right (+X)
+                        slot_box = Part.makeBox(
+                            slot_depth, slot_opening, length,
+                            FreeCAD.Vector(half - slot_depth, -slot_half, 0)
+                        )
+                        track_box = Part.makeBox(
+                            track_depth - slot_depth, track_width, length,
+                            FreeCAD.Vector(half - track_depth, -track_half, 0)
+                        )
+                        solid = solid.cut(slot_box)
+                        solid = solid.cut(track_box)
+                    elif side == 2:  # Top (+Y)
+                        slot_box = Part.makeBox(
+                            slot_opening, slot_depth, length,
+                            FreeCAD.Vector(-slot_half, half - slot_depth, 0)
+                        )
+                        track_box = Part.makeBox(
+                            track_width, track_depth - slot_depth, length,
+                            FreeCAD.Vector(-track_half, half - track_depth, 0)
+                        )
+                        solid = solid.cut(slot_box)
+                        solid = solid.cut(track_box)
+                    elif side == 3:  # Left (-X)
+                        slot_box = Part.makeBox(
+                            slot_depth, slot_opening, length,
+                            FreeCAD.Vector(-half, -slot_half, 0)
+                        )
+                        track_box = Part.makeBox(
+                            track_depth - slot_depth, track_width, length,
+                            FreeCAD.Vector(-half, -track_half, 0)
+                        )
+                        solid = solid.cut(slot_box)
+                        solid = solid.cut(track_box)
                 
                 # Create Part::Feature
                 obj = doc.addObject("Part::Feature", name)
-                obj.Shape = result
+                obj.Shape = solid
                 
                 # Set placement and rotation based on direction
                 if direction.upper() == "Z":
